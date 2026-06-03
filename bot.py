@@ -266,9 +266,8 @@ async def processar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Erro ao atualizar Sheets: {e}")
         await msg.edit_text(
-            f"❌ Erro ao atualizar o Google Sheets:\n`{str(e)}`\n\n"
-            "Verifique GOOGLE_CREDENTIALS_JSON e SPREADSHEET_ID no Render.",
-            parse_mode="Markdown"
+            f"❌ Erro ao atualizar o Google Sheets:\n{str(e)}\n\n"
+            "Verifique GOOGLE_CREDENTIALS_JSON e SPREADSHEET_ID no Render."
         )
 
     context.user_data.pop(AGUARDANDO_PDFS, None)
