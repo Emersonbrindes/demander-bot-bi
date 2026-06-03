@@ -60,6 +60,15 @@ def _normalizar_vendedor(nome: str) -> str:
     return nome.strip().title()
 
 
+def _get_worksheet(ss: gspread.Spreadsheet, nome: str) -> gspread.Worksheet:
+    """Busca aba pelo nome, tolerando variações de acento/maiúscula."""
+    nome_norm = nome.strip().upper()
+    for ws in ss.worksheets():
+        if ws.title.strip().upper() == nome_norm:
+            return ws
+    raise ValueError(f"Aba não encontrada: '{nome}'. Abas disponíveis: {[w.title for w in ss.worksheets()]}")
+
+
 def _conectar() -> gspread.Spreadsheet:
     """Conecta ao Google Sheets usando service account."""
     creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
@@ -94,7 +103,7 @@ def _limpar_e_escrever(ws: gspread.Worksheet, primeira_linha: int, dados: list[l
 
 def atualizar_cidades(ss: gspread.Spreadsheet, todos_dados: list[dict]):
     """Aba VENDAS X CIDADES — linha 4+: VENDEDOR | CIDADE | VALOR"""
-    ws = ss.worksheet("VENDAS X CIDADES")
+    ws = _get_worksheet(ss,"VENDAS X CIDADES")
     linhas = []
     for item in todos_dados:
         if item["tipo"] != "cidade":
@@ -108,7 +117,7 @@ def atualizar_cidades(ss: gspread.Spreadsheet, todos_dados: list[dict]):
 
 def atualizar_estados(ss: gspread.Spreadsheet, todos_dados: list[dict]):
     """Aba VENDAS X ESTADOS — linha 4+: VENDEDOR | ESTADO | VALOR"""
-    ws = ss.worksheet("VENDAS X ESTADOS")
+    ws = _get_worksheet(ss,"VENDAS X ESTADOS")
     linhas = []
     for item in todos_dados:
         if item["tipo"] != "estado":
@@ -122,7 +131,7 @@ def atualizar_estados(ss: gspread.Spreadsheet, todos_dados: list[dict]):
 
 def atualizar_mes(ss: gspread.Spreadsheet, todos_dados: list[dict]):
     """Aba VENDAS X MÊS — linha 5+: VENDEDOR | MÊS | VALOR"""
-    ws = ss.worksheet("VENDAS X MÊS")
+    ws = _get_worksheet(ss,"VENDAS X MÊS")
     linhas = []
     for item in todos_dados:
         if item["tipo"] != "mes":
@@ -136,7 +145,7 @@ def atualizar_mes(ss: gspread.Spreadsheet, todos_dados: list[dict]):
 
 def atualizar_produtos(ss: gspread.Spreadsheet, todos_dados: list[dict]):
     """Aba VENDAS X PRODUTOS — linha 2+: RANK | PRODUTO | VENDEDOR | VALOR"""
-    ws = ss.worksheet("VENDAS X PRODUTOS")
+    ws = _get_worksheet(ss,"VENDAS X PRODUTOS")
     linhas = []
     for item in todos_dados:
         if item["tipo"] != "produto":
@@ -154,7 +163,7 @@ def atualizar_produtos_consolidados(ss: gspread.Spreadsheet, todos_dados: list[d
     RANK | PRODUTO | TOTAL GERAL | % GERAL | [col por vendedor ordenado]
     Linha 1 = cabeçalho (não apaga), linha 2+ = dados
     """
-    ws = ss.worksheet("PRODUTOS CONSOLIDADOS")
+    ws = _get_worksheet(ss,"PRODUTOS CONSOLIDADOS")
 
     # Agrega: produto → {vendedor: valor}
     produto_vendedor: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
@@ -200,7 +209,7 @@ def atualizar_realizado_metas(ss: gspread.Spreadsheet, todos_dados: list[dict]):
     Colunas B-M = Jan-Dez
     Limpa apenas as células de valor (B14:M21) e reescreve.
     """
-    ws = ss.worksheet("METAS X VENDAS")
+    ws = _get_worksheet(ss,"METAS X VENDAS")
 
     # Agrega: vendedor → {mes_num: valor}
     realizado: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
