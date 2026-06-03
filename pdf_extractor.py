@@ -72,9 +72,11 @@ def extrair_tabela_pdf(pdf_path: str) -> list[list]:
     rows = []
     try:
         with pdfplumber.open(pdf_path) as pdf:
+            logger.warning(f"PDF aberto: {pdf_path} | paginas: {len(pdf.pages)}")
             for page in pdf.pages:
                 # Tentativa 1: extração por tabela
                 tables = page.extract_tables()
+                logger.warning(f"Tabelas encontradas: {len(tables)}")
                 for table in tables:
                     for row in table:
                         if not row or len(row) < 3:
@@ -96,9 +98,10 @@ def extrair_tabela_pdf(pdf_path: str) -> list[list]:
                         rows.append([int(rank_str), categoria, valor])
 
                 # Tentativa 2: fallback por texto (pdfplumber não encontrou tabela)
+                logger.warning(f"Rows apos tabela: {len(rows)}")
                 if not rows:
                     texto = page.extract_text() or ""
-                    logger.info(f"TEXTO BRUTO: {repr(texto[:600])}")
+                    logger.warning(f"TEXTO BRUTO: {repr(texto[:600])}")
                     for linha in texto.split("\n"):
                         linha = linha.strip()
                         # Padrão: linha contém R$ — split nele
