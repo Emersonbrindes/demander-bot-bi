@@ -98,6 +98,7 @@ def extrair_tabela_pdf(pdf_path: str) -> list[list]:
                 # Tentativa 2: fallback por texto (pdfplumber não encontrou tabela)
                 if not rows:
                     texto = page.extract_text() or ""
+                    logger.info(f"TEXTO BRUTO: {repr(texto[:600])}")
                     for linha in texto.split("\n"):
                         linha = linha.strip()
                         # Padrão: linha contém R$ — split nele

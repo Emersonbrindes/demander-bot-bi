@@ -165,6 +165,36 @@ async def escolher_cidade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# /debug — mostra texto bruto extraído de um PDF
+# ──────────────────────────────────────────────────────────────────────────────
+
+async def debug_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Recebe um PDF e mostra o texto extraído pelo pdfplumber."""
+    if not update.message.document:
+        await update.message.reply_text("Envie um PDF junto com /debug")
+        return
+    doc = update.message.document
+    import tempfile, pdfplumber
+    file = await doc.get_file()
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    await file.download_to_drive(tmp.name)
+    try:
+        with pdfplumber.open(tmp.name) as pdf:
+            page = pdf.pages[0]
+            tables = page.extract_tables()
+            texto = page.extract_text() or ""
+            resposta = (
+                f"Tabelas encontradas: {len(tables)}\n\n"
+                f"Texto (primeiros 800 chars):\n{repr(texto[:800])}"
+            )
+    except Exception as e:
+        resposta = f"Erro: {e}"
+    import os
+    os.remove(tmp.name)
+    await update.message.reply_text(resposta[:4000])
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # /relatorios — recebe PDFs e atualiza Google Sheets
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -300,6 +330,7 @@ def main():
     app.add_handler(CommandHandler("processar", processar))
     app.add_handler(CommandHandler("cancelar", cancelar))
     app.add_handler(conv_clientes)
+    app.add_handler(MessageHandler(filters.Document.PDF & filters.COMMAND, debug_pdf))
     app.add_handler(MessageHandler(filters.Document.PDF, receber_pdf))
 
     logger.info("Bot iniciado!")
