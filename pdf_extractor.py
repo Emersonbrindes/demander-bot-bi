@@ -95,20 +95,31 @@ def extrair_tabela_pdf(pdf_path: str) -> list[list]:
                         )
                         rows.append([int(rank_str), categoria, valor])
 
-                # Tentativa 2: fallback por texto se tabela vazia
+                # Tentativa 2: fallback por texto (pdfplumber não encontrou tabela)
                 if not rows:
                     texto = page.extract_text() or ""
-                    logger.info(f"  Texto extraído (primeiros 500 chars): {texto[:500]}")
                     for linha in texto.split("\n"):
                         linha = linha.strip()
-                        # Padrão: linha começa com número, contém R$ e valor
-                        m = re.match(r'^(\d+)\s+(.+?)\s+R\$\s*([\d.]+,\d+)', linha)
-                        if m:
-                            rank_str = m.group(1)
-                            categoria = m.group(2).strip()
-                            valor = limpar_valor("R$ " + m.group(3))
-                            if valor is not None:
-                                rows.append([int(rank_str), categoria, valor])
+                        # Padrão: linha contém R$ — split nele
+                        if "R$" not in linha:
+                            continue
+                        partes = linha.split("R$", 1)
+                        antes = partes[0].strip().split()
+                        depois = partes[1].strip()
+                        # antes deve começar com número (rank)
+                        if not antes or not antes[0].isdigit():
+                            continue
+                        rank = int(antes[0])
+                        categoria = " ".join(antes[1:]).strip()
+                        if not categoria:
+                            continue
+                        # valor é o primeiro token numérico após R$
+                        valor_match = re.match(r'([\d.,]+)', depois)
+                        if not valor_match:
+                            continue
+                        valor = limpar_valor("R$" + valor_match.group(1))
+                        if valor is not None:
+                            rows.append([rank, categoria, valor])
 
     except Exception as e:
         logger.error(f"Erro ao ler PDF {pdf_path}: {e}")
