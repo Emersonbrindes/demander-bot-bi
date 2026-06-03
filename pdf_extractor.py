@@ -67,11 +67,13 @@ def extrair_tabela_pdf(pdf_path: str) -> list[list]:
     """
     Lê todas as páginas do PDF e retorna as linhas de dados
     como lista de listas [rank, col_categoria, valor_float].
+    Tenta primeiro via tabela, depois via texto linha a linha.
     """
     rows = []
     try:
         with pdfplumber.open(pdf_path) as pdf:
             for page in pdf.pages:
+                # Tentativa 1: extração por tabela
                 tables = page.extract_tables()
                 for table in tables:
                     for row in table:
@@ -79,24 +81,41 @@ def extrair_tabela_pdf(pdf_path: str) -> list[list]:
                             continue
                         rank_str = str(row[0] or "").strip()
                         if not rank_str.isdigit():
-                            continue  # pula cabeçalho e linhas vazias
+                            continue
 
-                        # Valor está na penúltima coluna
                         valor_raw = str(row[-2] or "")
                         valor = limpar_valor(valor_raw)
                         if valor is None:
                             continue
 
-                        # Categoria: tudo entre rank e valor
                         categoria = " ".join(
                             str(c or "").strip()
                             for c in row[1:-2]
                             if str(c or "").strip()
                         )
-
                         rows.append([int(rank_str), categoria, valor])
+
+                # Tentativa 2: fallback por texto se tabela vazia
+                if not rows:
+                    texto = page.extract_text() or ""
+                    for linha in texto.split("\n"):
+                        linha = linha.strip()
+                        # Padrão: "1 04/2026 R$ 9.840,00 1,66%"
+                        m = re.match(
+                            r'^(\d+)\s+(.+?)\s+(R\$\s*[\d.,]+)\s+[\d.,]+%?$',
+                            linha
+                        )
+                        if m:
+                            rank_str = m.group(1)
+                            categoria = m.group(2).strip()
+                            valor = limpar_valor(m.group(3))
+                            if valor is not None:
+                                rows.append([int(rank_str), categoria, valor])
+
     except Exception as e:
         logger.error(f"Erro ao ler PDF {pdf_path}: {e}")
+
+    logger.info(f"  Linhas extraídas: {len(rows)}")
     return rows
 
 

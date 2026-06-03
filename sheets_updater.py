@@ -252,8 +252,10 @@ def atualizar_sheets(todos_dados: list[dict]) -> str:
     ss = _conectar()
 
     contadores = {t: 0 for t in ["mes", "produto", "cidade", "estado", "cliente", "pagamento"]}
+    linhas_total = {t: 0 for t in ["mes", "produto", "cidade", "estado", "cliente", "pagamento"]}
     for item in todos_dados:
         contadores[item["tipo"]] += 1
+        linhas_total[item["tipo"]] += len(item["dados"])
 
     atualizar_cidades(ss, todos_dados)
     atualizar_estados(ss, todos_dados)
@@ -265,10 +267,10 @@ def atualizar_sheets(todos_dados: list[dict]) -> str:
     resumo = (
         f"✅ Google Sheets atualizado!\n\n"
         f"📊 PDFs processados:\n"
-        f"  • Mês: {contadores['mes']}\n"
-        f"  • Produto: {contadores['produto']}\n"
-        f"  • Cidade: {contadores['cidade']}\n"
-        f"  • Estado: {contadores['estado']}\n"
-        f"  • Cliente: {contadores['cliente']}\n"
+        f"  • Mês: {contadores['mes']} ({linhas_total['mes']} linhas)\n"
+        f"  • Produto: {contadores['produto']} ({linhas_total['produto']} linhas)\n"
+        f"  • Cidade: {contadores['cidade']} ({linhas_total['cidade']} linhas)\n"
+        f"  • Estado: {contadores['estado']} ({linhas_total['estado']} linhas)\n"
+        f"  • Cliente: {contadores['cliente']} ({linhas_total['cliente']} linhas)\n"
     )
     return resumo
