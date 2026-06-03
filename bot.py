@@ -1,11 +1,15 @@
 import os
+import shutil
 import logging
+import tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler,
-    ContextTypes, ConversationHandler
+    Application, CommandHandler, CallbackQueryHandler, MessageHandler,
+    ContextTypes, ConversationHandler, filters
 )
 from scraper import DemandScraper
+from pdf_extractor import extrair_pdf
+from sheets_updater import atualizar_sheets
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -13,10 +17,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Estados da conversa
+# Estados da conversa /clientes
 ESCOLHER_ESTADO, ESCOLHER_CIDADE = range(2)
 
-# Lista de estados brasileiros
+# Chave de estado para modo /relatorios
+AGUARDANDO_PDFS = "aguardando_pdfs"
+
 ESTADOS = [
     "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO",
     "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI",
@@ -24,12 +30,18 @@ ESTADOS = [
 ]
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Comandos gerais
+# ──────────────────────────────────────────────────────────────────────────────
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /start — apresenta o bot."""
     await update.message.reply_text(
         "👋 Olá! Sou seu assistente do Demander.\n\n"
-        "Use /clientes para exportar a lista de clientes em Excel.\n"
-        "Use /ajuda para ver todos os comandos."
+        "📋 *Comandos disponíveis:*\n"
+        "/clientes — Exportar lista de clientes em Excel\n"
+        "/relatorios — Enviar PDFs para atualizar o Google Sheets\n"
+        "/ajuda — Ver todos os comandos",
+        parse_mode="Markdown"
     )
 
 
@@ -37,15 +49,25 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📋 *Comandos disponíveis:*\n\n"
         "/clientes — Exportar clientes por cidade em Excel\n"
-        "/start — Reiniciar o bot\n"
+        "/relatorios — Enviar PDFs e atualizar o Google Sheets (BI)\n"
+        "/processar — Processar PDFs enviados e atualizar o Sheets\n"
         "/cancelar — Cancelar operação em andamento",
         parse_mode="Markdown"
     )
 
 
+async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop(AGUARDANDO_PDFS, None)
+    context.user_data.pop("pdfs_recebidos", None)
+    await update.message.reply_text("🚫 Operação cancelada.")
+    return ConversationHandler.END
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# /clientes — fluxo existente
+# ──────────────────────────────────────────────────────────────────────────────
+
 async def clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Inicia o fluxo: escolha de estado."""
-    # Monta teclado com estados em grade 5 colunas
     teclado = []
     linha = []
     for i, uf in enumerate(ESTADOS):
@@ -66,7 +88,6 @@ async def clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def escolher_estado(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Usuário escolheu um estado — busca cidades disponíveis no Demander."""
     query = update.callback_query
     await query.answer()
 
@@ -91,7 +112,6 @@ async def escolher_estado(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["cidades"] = cidades
 
-    # Monta teclado com as cidades encontradas
     teclado = []
     for cidade in sorted(cidades):
         teclado.append([InlineKeyboardButton(cidade, callback_data=f"cidade:{cidade}")])
@@ -106,7 +126,6 @@ async def escolher_estado(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def escolher_cidade(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Usuário escolheu a cidade — faz scraping e gera Excel."""
     query = update.callback_query
     await query.answer()
 
@@ -135,8 +154,6 @@ async def escolher_cidade(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ Excel gerado para *{cidade} - {estado}*.",
             parse_mode="Markdown"
         )
-
-        # Remove arquivo temporário
         os.remove(caminho_excel)
 
     except Exception as e:
@@ -148,11 +165,120 @@ async def escolher_cidade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancela qualquer operação em andamento."""
-    await update.message.reply_text("🚫 Operação cancelada.")
-    return ConversationHandler.END
+# ──────────────────────────────────────────────────────────────────────────────
+# /relatorios — recebe PDFs e atualiza Google Sheets
+# ──────────────────────────────────────────────────────────────────────────────
 
+async def relatorios(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ativa o modo de recebimento de PDFs."""
+    context.user_data[AGUARDANDO_PDFS] = True
+    context.user_data["pdfs_recebidos"] = []
+
+    await update.message.reply_text(
+        "📂 *Modo de atualização do BI ativado!*\n\n"
+        "Envie os PDFs dos relatórios (um a um ou vários de uma vez).\n\n"
+        "Quando terminar, envie /processar para atualizar o Google Sheets.\n"
+        "Use /cancelar para sair sem processar.",
+        parse_mode="Markdown"
+    )
+
+
+async def receber_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Recebe cada PDF enviado durante o modo /relatorios."""
+    if not context.user_data.get(AGUARDANDO_PDFS):
+        return  # ignora PDFs fora do modo relatorios
+
+    doc = update.message.document
+    if doc.mime_type != "application/pdf":
+        await update.message.reply_text("⚠️ Envie apenas arquivos PDF.")
+        return
+
+    # Baixa para arquivo temporário
+    file = await doc.get_file()
+    tmp = tempfile.NamedTemporaryFile(
+        suffix=".pdf", delete=False,
+        prefix=doc.file_name.replace("/", "_").replace(" ", "_") + "_"
+    )
+    await file.download_to_drive(tmp.name)
+
+    context.user_data["pdfs_recebidos"].append({
+        "path": tmp.name,
+        "name": doc.file_name
+    })
+
+    total = len(context.user_data["pdfs_recebidos"])
+    await update.message.reply_text(
+        f"✅ *{doc.file_name}* recebido ({total} PDF{'s' if total > 1 else ''} no total).\n"
+        "Continue enviando ou use /processar quando terminar.",
+        parse_mode="Markdown"
+    )
+
+
+async def processar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Processa todos os PDFs recebidos e atualiza o Google Sheets."""
+    if not context.user_data.get(AGUARDANDO_PDFS):
+        await update.message.reply_text("⚠️ Use /relatorios primeiro para ativar o modo de upload.")
+        return
+
+    pdfs = context.user_data.get("pdfs_recebidos", [])
+    if not pdfs:
+        await update.message.reply_text("⚠️ Nenhum PDF recebido ainda. Envie os arquivos primeiro.")
+        return
+
+    msg = await update.message.reply_text(
+        f"⏳ Processando {len(pdfs)} PDF(s)...\nIsso pode levar alguns segundos."
+    )
+
+    todos_dados = []
+    erros = []
+
+    for item in pdfs:
+        # Copia para path com nome original (o extrator usa o nome do arquivo)
+        nome_arquivo = item["name"]
+        novo_path = os.path.join(tempfile.gettempdir(), nome_arquivo.replace("/", "_"))
+        shutil.copy2(item["path"], novo_path)
+        os.remove(item["path"])
+
+        resultado = extrair_pdf(novo_path)
+        os.remove(novo_path)
+
+        if resultado:
+            todos_dados.append(resultado)
+        else:
+            erros.append(nome_arquivo)
+
+    if not todos_dados:
+        await msg.edit_text(
+            "❌ Nenhum PDF foi reconhecido.\n"
+            "Verifique se os arquivos são relatórios válidos do Demander (Vendas X Mês, Produto, etc.)."
+        )
+        context.user_data.pop(AGUARDANDO_PDFS, None)
+        context.user_data.pop("pdfs_recebidos", None)
+        return
+
+    try:
+        resumo = atualizar_sheets(todos_dados)
+
+        if erros:
+            resumo += f"\n\n⚠️ PDFs não reconhecidos ({len(erros)}):\n" + "\n".join(f"  • {e}" for e in erros)
+
+        await msg.edit_text(resumo, parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error(f"Erro ao atualizar Sheets: {e}")
+        await msg.edit_text(
+            f"❌ Erro ao atualizar o Google Sheets:\n`{str(e)}`\n\n"
+            "Verifique GOOGLE_CREDENTIALS_JSON e SPREADSHEET_ID no Render.",
+            parse_mode="Markdown"
+        )
+
+    context.user_data.pop(AGUARDANDO_PDFS, None)
+    context.user_data.pop("pdfs_recebidos", None)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Main
+# ──────────────────────────────────────────────────────────────────────────────
 
 def main():
     token = os.environ.get("TELEGRAM_TOKEN")
@@ -161,7 +287,7 @@ def main():
 
     app = Application.builder().token(token).build()
 
-    conv = ConversationHandler(
+    conv_clientes = ConversationHandler(
         entry_points=[CommandHandler("clientes", clientes)],
         states={
             ESCOLHER_ESTADO: [CallbackQueryHandler(escolher_estado, pattern="^estado:")],
@@ -172,7 +298,11 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ajuda", ajuda))
-    app.add_handler(conv)
+    app.add_handler(CommandHandler("relatorios", relatorios))
+    app.add_handler(CommandHandler("processar", processar))
+    app.add_handler(CommandHandler("cancelar", cancelar))
+    app.add_handler(conv_clientes)
+    app.add_handler(MessageHandler(filters.Document.PDF, receber_pdf))
 
     logger.info("Bot iniciado!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
