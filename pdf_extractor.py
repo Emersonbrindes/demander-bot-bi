@@ -98,17 +98,15 @@ def extrair_tabela_pdf(pdf_path: str) -> list[list]:
                 # Tentativa 2: fallback por texto se tabela vazia
                 if not rows:
                     texto = page.extract_text() or ""
+                    logger.info(f"  Texto extraído (primeiros 500 chars): {texto[:500]}")
                     for linha in texto.split("\n"):
                         linha = linha.strip()
-                        # Padrão: "1 04/2026 R$ 9.840,00 1,66%"
-                        m = re.match(
-                            r'^(\d+)\s+(.+?)\s+(R\$\s*[\d.,]+)\s+[\d.,]+%?$',
-                            linha
-                        )
+                        # Padrão: linha começa com número, contém R$ e valor
+                        m = re.match(r'^(\d+)\s+(.+?)\s+R\$\s*([\d.]+,\d+)', linha)
                         if m:
                             rank_str = m.group(1)
                             categoria = m.group(2).strip()
-                            valor = limpar_valor(m.group(3))
+                            valor = limpar_valor("R$ " + m.group(3))
                             if valor is not None:
                                 rows.append([int(rank_str), categoria, valor])
 
