@@ -261,7 +261,7 @@ async def processar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if erros:
             resumo += f"\n\n⚠️ PDFs não reconhecidos ({len(erros)}):\n" + "\n".join(f"  • {e}" for e in erros)
 
-        await msg.edit_text(resumo, parse_mode="Markdown")
+        await msg.edit_text(resumo)
 
     except Exception as e:
         logger.error(f"Erro ao atualizar Sheets: {e}")
