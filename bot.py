@@ -7,7 +7,6 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler,
     ContextTypes, ConversationHandler, filters
 )
-from scraper import DemandScraper
 from pdf_extractor import extrair_pdf
 from sheets_updater import atualizar_sheets
 
