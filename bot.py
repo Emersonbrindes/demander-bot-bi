@@ -168,6 +168,17 @@ async def escolher_cidade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # /debug — mostra texto bruto extraído de um PDF
 # ──────────────────────────────────────────────────────────────────────────────
 
+async def receber_foto_invalida(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Avisa o usuário que enviou uma foto em vez de um arquivo PDF."""
+    if context.user_data.get(AGUARDANDO_PDFS):
+        await update.message.reply_text(
+            "⚠️ Você enviou uma *foto*, não um PDF.\n"
+            "Para enviar PDFs, toque em 📎 → *Arquivo* e selecione o PDF.",
+            parse_mode="Markdown"
+        )
+    # Fora do modo /relatorios: ignora silenciosamente
+
+
 async def debug_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Recebe um PDF e mostra o texto extraído pelo pdfplumber."""
     if not update.message.document:
@@ -216,6 +227,15 @@ async def receber_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Recebe cada PDF enviado durante o modo /relatorios."""
     if not context.user_data.get(AGUARDANDO_PDFS):
         return  # ignora PDFs fora do modo relatorios
+
+    # Foto ou outro arquivo não-documento (ex: imagem enviada como foto)
+    if not update.message.document:
+        await update.message.reply_text(
+            "⚠️ Isso é uma foto/imagem, não um PDF.\n"
+            "Para enviar PDFs, use o ícone de 📎 *Arquivo* (não a câmera).",
+            parse_mode="Markdown"
+        )
+        return
 
     doc = update.message.document
     if doc.mime_type != "application/pdf":
@@ -277,9 +297,13 @@ async def processar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             erros.append(nome_arquivo)
 
     if not todos_dados:
+        lista_erros = "\n".join(f"• {e}" for e in erros)
         await msg.edit_text(
-            "❌ Nenhum PDF foi reconhecido.\n"
-            "Verifique se os arquivos são relatórios válidos do Demander (Vendas X Mês, Produto, etc.)."
+            "❌ Nenhum PDF foi reconhecido.\n\n"
+            "O bot tenta detectar o tipo pelo nome e pelo conteúdo do arquivo. "
+            "Certifique-se de que são relatórios do Demander (Vendas X Mês, Produto, Cliente, etc.).\n\n"
+            f"Arquivos recebidos:\n{lista_erros}\n\n"
+            "💡 Dica: envie um PDF com /debug como legenda para ver o texto extraído."
         )
         context.user_data.pop(AGUARDANDO_PDFS, None)
         context.user_data.pop("pdfs_recebidos", None)
@@ -332,6 +356,8 @@ def main():
     app.add_handler(conv_clientes)
     app.add_handler(MessageHandler(filters.Document.PDF & filters.COMMAND, debug_pdf))
     app.add_handler(MessageHandler(filters.Document.PDF, receber_pdf))
+    # Foto enviada (não como arquivo) — avisa o usuário
+    app.add_handler(MessageHandler(filters.PHOTO, receber_foto_invalida))
 
     logger.info("Bot iniciado!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)

@@ -20,8 +20,8 @@ MES_NOME = {
 }
 
 
-def detectar_tipo(filename: str) -> str | None:
-    """Detecta o tipo de relatório pelo nome do arquivo."""
+def detectar_tipo(filename: str, pdf_path: str = None) -> str | None:
+    """Detecta o tipo de relatório pelo nome do arquivo; se falhar, tenta pelo conteúdo."""
     fn = filename.lower()
     if "mês" in fn or "mes" in fn:
         return "mes"
@@ -35,6 +35,27 @@ def detectar_tipo(filename: str) -> str | None:
         return "estado"
     if "condição" in fn or "condicao" in fn or "pagamento" in fn:
         return "pagamento"
+
+    # Fallback: detecta pelo conteúdo do PDF
+    if pdf_path:
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                text = (pdf.pages[0].extract_text() or "").lower()
+                if "vendas x mês" in text or "vendas x mes" in text or "por mês" in text or "por mes" in text:
+                    return "mes"
+                if "vendas x produto" in text or "por produto" in text:
+                    return "produto"
+                if "vendas x cliente" in text or "por cliente" in text:
+                    return "cliente"
+                if "vendas x cidade" in text or "por cidade" in text:
+                    return "cidade"
+                if "vendas x estado" in text or "por estado" in text:
+                    return "estado"
+                if "condição de pagamento" in text or "condicao de pagamento" in text or "pagamento" in text:
+                    return "pagamento"
+        except Exception as e:
+            logger.warning(f"Erro ao detectar tipo pelo conteúdo de {pdf_path}: {e}")
+
     return None
 
 
@@ -70,6 +91,7 @@ def extrair_tabela_pdf(pdf_path: str) -> list[list]:
     Tenta primeiro via tabela, depois via texto linha a linha.
     """
     rows = []
+    logger.warning(f"INICIANDO extracao: {pdf_path}")
     try:
         with pdfplumber.open(pdf_path) as pdf:
             logger.warning(f"PDF aberto: {pdf_path} | paginas: {len(pdf.pages)}")
@@ -126,7 +148,7 @@ def extrair_tabela_pdf(pdf_path: str) -> list[list]:
                             rows.append([rank, categoria, valor])
 
     except Exception as e:
-        logger.error(f"Erro ao ler PDF {pdf_path}: {e}")
+        logger.warning(f"EXCECAO ao ler PDF {pdf_path}: {e}")
 
     logger.info(f"  Linhas extraídas: {len(rows)}")
     return rows
@@ -146,7 +168,7 @@ def extrair_pdf(pdf_path: str) -> dict:
     }
     Retorna None se o tipo não for reconhecido.
     """
-    tipo = detectar_tipo(Path(pdf_path).name)
+    tipo = detectar_tipo(Path(pdf_path).name, pdf_path)
     if tipo is None:
         logger.warning(f"Tipo não reconhecido: {pdf_path}")
         return None
