@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import logging
 import tempfile
@@ -9,6 +10,7 @@ from telegram.ext import (
 )
 from pdf_extractor import extrair_pdf
 from sheets_updater import atualizar_sheets
+from scraper import DemandScraper
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -226,14 +228,8 @@ async def relatorios(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receber_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Recebe cada PDF enviado durante o modo /relatorios."""
     if not context.user_data.get(AGUARDANDO_PDFS):
-        return  # ignora PDFs fora do modo relatorios
-
-    # Foto ou outro arquivo não-documento (ex: imagem enviada como foto)
-    if not update.message.document:
         await update.message.reply_text(
-            "⚠️ Isso é uma foto/imagem, não um PDF.\n"
-            "Para enviar PDFs, use o ícone de 📎 *Arquivo* (não a câmera).",
-            parse_mode="Markdown"
+            "⚠️ Para enviar PDFs, use /relatorios primeiro para ativar o modo de upload."
         )
         return
 
@@ -242,25 +238,33 @@ async def receber_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Envie apenas arquivos PDF.")
         return
 
-    # Baixa para arquivo temporário
-    file = await doc.get_file()
-    tmp = tempfile.NamedTemporaryFile(
-        suffix=".pdf", delete=False,
-        prefix=doc.file_name.replace("/", "_").replace(" ", "_") + "_"
-    )
-    await file.download_to_drive(tmp.name)
+    try:
+        # Baixa para arquivo temporário
+        file = await doc.get_file()
+        safe_name = re.sub(r'[^\w\-.]', '_', doc.file_name)
+        tmp = tempfile.NamedTemporaryFile(
+            suffix=".pdf", delete=False,
+            prefix=safe_name + "_"
+        )
+        await file.download_to_drive(tmp.name)
 
-    context.user_data["pdfs_recebidos"].append({
-        "path": tmp.name,
-        "name": doc.file_name
-    })
+        context.user_data["pdfs_recebidos"].append({
+            "path": tmp.name,
+            "name": doc.file_name
+        })
 
-    total = len(context.user_data["pdfs_recebidos"])
-    await update.message.reply_text(
-        f"✅ *{doc.file_name}* recebido ({total} PDF{'s' if total > 1 else ''} no total).\n"
-        "Continue enviando ou use /processar quando terminar.",
-        parse_mode="Markdown"
-    )
+        total = len(context.user_data["pdfs_recebidos"])
+        await update.message.reply_text(
+            f"✅ *{doc.file_name}* recebido ({total} PDF{'s' if total > 1 else ''} no total).\n"
+            "Continue enviando ou use /processar quando terminar.",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Erro ao receber PDF {doc.file_name}: {e}")
+        await update.message.reply_text(
+            f"❌ Erro ao receber o arquivo *{doc.file_name}*:\n`{e}`\n\nTente enviar novamente.",
+            parse_mode="Markdown"
+        )
 
 
 async def processar(update: Update, context: ContextTypes.DEFAULT_TYPE):

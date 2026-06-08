@@ -249,4 +249,13 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ajuda", ajuda))
     app.add_handler(CommandHandler("cancelar", cancelar))
-    app.add_handler(conv_cli
+    app.add_handler(conv_clientes)
+    app.add_handler(CallbackQueryHandler(escolher_representante, pattern="^rep:"))
+    app.add_handler(MessageHandler(filters.Document.PDF, receber_pdf))
+    app.add_handler(MessageHandler(filters.PHOTO, receber_foto_invalida))
+    logger.info("Bot iniciado!")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+if __name__ == "__main__":
+    main()
