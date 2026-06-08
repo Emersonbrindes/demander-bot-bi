@@ -1,180 +1,173 @@
-"""
-pdf_extractor.py
-Extrai dados dos relatórios PDF do Demander (Vendas X Mês, Produto, Cliente, etc.)
-e retorna listas de dicts prontas para o sheets_updater.
-"""
-
 import re
 import logging
-import pdfplumber
+import fitz
 from pathlib import Path
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
-# Mapeamento mês numérico → nome em português (para aba METAS X VENDAS)
-MES_NOME = {
-    "01": "JANEIRO", "02": "FEVEREIRO", "03": "MARÇO",
-    "04": "ABRIL",   "05": "MAIO",      "06": "JUNHO",
-    "07": "JULHO",   "08": "AGOSTO",    "09": "SETEMBRO",
-    "10": "OUTUBRO", "11": "NOVEMBRO",  "12": "DEZEMBRO",
-}
+ROW_TOL = 3
+PRODUCT_CODE_RE = re.compile(r'^\d{8,}$')
+CLIENT_CODE_RE  = re.compile(r'^\d+\s*-\s*\d+\s*-\s*')
+CX_RE           = re.compile(r'\s+CX\s+\d+.*$', re.IGNORECASE)
 
 
-def detectar_tipo(filename: str, pdf_path: str = None) -> str | None:
-    """Detecta o tipo de relatório pelo nome do arquivo; se falhar, tenta pelo conteúdo."""
-    fn = filename.lower()
-    if "mês" in fn or "mes" in fn:
-        return "mes"
-    if "produto" in fn:
-        return "produto"
-    if "cliente" in fn:
-        return "cliente"
-    if "cidade" in fn:
-        return "cidade"
-    if "estado" in fn:
-        return "estado"
-    if "condição" in fn or "condicao" in fn or "pagamento" in fn:
-        return "pagamento"
-
-    # Fallback: detecta pelo conteúdo do PDF
-    if pdf_path:
-        try:
-            with pdfplumber.open(pdf_path) as pdf:
-                text = (pdf.pages[0].extract_text() or "").lower()
-                if "vendas x mês" in text or "vendas x mes" in text or "por mês" in text or "por mes" in text:
-                    return "mes"
-                if "vendas x produto" in text or "por produto" in text:
-                    return "produto"
-                if "vendas x cliente" in text or "por cliente" in text:
-                    return "cliente"
-                if "vendas x cidade" in text or "por cidade" in text:
-                    return "cidade"
-                if "vendas x estado" in text or "por estado" in text:
-                    return "estado"
-                if "condição de pagamento" in text or "condicao de pagamento" in text or "pagamento" in text:
-                    return "pagamento"
-        except Exception as e:
-            logger.warning(f"Erro ao detectar tipo pelo conteúdo de {pdf_path}: {e}")
-
-    return None
+def _palavras_por_linha(page):
+    words = page.get_text('words')
+    rows = {}
+    for w in words:
+        x0, y0, txt = w[0], w[1], w[4]
+        y_key = round(y0 / ROW_TOL) * ROW_TOL
+        rows.setdefault(y_key, []).append((x0, txt))
+    return [(y, sorted(rows[y])) for y in sorted(rows)]
 
 
-def extrair_vendedor(pdf_path: str) -> str:
-    """Extrai o nome do vendedor do cabeçalho do PDF."""
-    try:
-        with pdfplumber.open(pdf_path) as pdf:
-            text = pdf.pages[0].extract_text() or ""
-            # Padrão: "N - NOME SOBRENOME"
-            match = re.search(r'\d+\s*-\s*([A-ZÁÉÍÓÚÃÕÇÂÊÔ][A-ZÁÉÍÓÚÃÕÇÂÊÔA-Z\s]+)', text)
-            if match:
-                return match.group(1).strip().title()
-    except Exception as e:
-        logger.warning(f"Não conseguiu extrair vendedor de {pdf_path}: {e}")
-    return Path(pdf_path).parent.name  # fallback: nome da pasta
+def _is_noise(texts):
+    line = ' '.join(texts)
+    if re.search(r'p[áa]gina\s+\d+', line, re.I): return True
+    if re.search(r'www\.|emitido|demander\.com', line, re.I): return True
+    if re.search(r'^\d+\.\d+\.\d+', line): return True
+    return False
 
 
-def limpar_valor(texto: str) -> float | None:
-    """Converte 'R$ 1.234,56' → 1234.56"""
-    if not texto:
-        return None
-    limpo = re.sub(r'[R$\s]', '', str(texto)).replace('.', '').replace(',', '.')
+def _limpar_valor(txt):
+    limpo = re.sub(r'[R$\s]', '', txt).replace('.', '').replace(',', '.')
     try:
         return float(limpo)
     except ValueError:
         return None
 
 
-def extrair_tabela_pdf(pdf_path: str) -> list[list]:
-    """
-    Lê todas as páginas do PDF e retorna as linhas de dados
-    como lista de listas [rank, col_categoria, valor_float].
-    Tenta primeiro via tabela, depois via texto linha a linha.
-    """
-    rows = []
-    logger.warning(f"INICIANDO extracao: {pdf_path}")
+def detectar_tipo(filename, pdf_path=None):
+    fn = filename.lower()
+    if 'mes' in fn or 'mês' in fn: return 'mes'
+    if 'produto' in fn: return 'produto'
+    if 'cliente' in fn: return 'cliente'
+    if 'cidade' in fn: return 'cidade'
+    if 'estado' in fn: return 'estado'
+    if 'pagamento' in fn or 'condicao' in fn or 'condição' in fn: return 'pagamento'
+    if pdf_path:
+        try:
+            doc = fitz.open(pdf_path)
+            text = doc[0].get_text().lower()
+            for kw, tp in [('vendas x mês','mes'),('vendas x mes','mes'),
+                           ('vendas x produto','produto'),('vendas x cliente','cliente'),
+                           ('vendas x cidade','cidade'),('vendas x estado','estado'),
+                           ('pagamento','pagamento')]:
+                if kw in text: return tp
+        except: pass
+    return None
+
+
+def extrair_vendedor(pdf_path):
     try:
-        with pdfplumber.open(pdf_path) as pdf:
-            logger.warning(f"PDF aberto: {pdf_path} | paginas: {len(pdf.pages)}")
-            for page in pdf.pages:
-                # Tentativa 1: extração por tabela
-                tables = page.extract_tables()
-                logger.warning(f"Tabelas encontradas: {len(tables)}")
-                for table in tables:
-                    for row in table:
-                        if not row or len(row) < 3:
-                            continue
-                        rank_str = str(row[0] or "").strip()
-                        if not rank_str.isdigit():
-                            continue
-
-                        valor_raw = str(row[-2] or "")
-                        valor = limpar_valor(valor_raw)
-                        if valor is None:
-                            continue
-
-                        categoria = " ".join(
-                            str(c or "").strip()
-                            for c in row[1:-2]
-                            if str(c or "").strip()
-                        )
-                        rows.append([int(rank_str), categoria, valor])
-
-                # Tentativa 2: fallback por texto (pdfplumber não encontrou tabela)
-                logger.warning(f"Rows apos tabela: {len(rows)}")
-                if not rows:
-                    texto = page.extract_text() or ""
-                    logger.warning(f"TEXTO BRUTO: {repr(texto[:600])}")
-                    for linha in texto.split("\n"):
-                        linha = linha.strip()
-                        # Padrão: linha contém R$ — split nele
-                        if "R$" not in linha:
-                            continue
-                        partes = linha.split("R$", 1)
-                        antes = partes[0].strip().split()
-                        depois = partes[1].strip()
-                        # antes deve começar com número (rank)
-                        if not antes or not antes[0].isdigit():
-                            continue
-                        rank = int(antes[0])
-                        categoria = " ".join(antes[1:]).strip()
-                        if not categoria:
-                            continue
-                        # valor é o primeiro token numérico após R$
-                        valor_match = re.match(r'([\d.,]+)', depois)
-                        if not valor_match:
-                            continue
-                        valor = limpar_valor("R$" + valor_match.group(1))
-                        if valor is not None:
-                            rows.append([rank, categoria, valor])
-
-    except Exception as e:
-        logger.warning(f"EXCECAO ao ler PDF {pdf_path}: {e}")
-
-    logger.info(f"  Linhas extraídas: {len(rows)}")
-    return rows
+        doc = fitz.open(pdf_path)
+        text = doc[0].get_text()
+        m = re.search(r'\d+\s*-\s*([A-ZÁÉÍÓÚÃÕÇÂÊÔ][A-ZÁÉÍÓÚÃÕÇÂÊÔA-Z\s]+)', text)
+        if m: return m.group(1).strip().title()
+    except: pass
+    return Path(pdf_path).stem
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Funções públicas — retornam dicts prontos para o sheets_updater
-# ──────────────────────────────────────────────────────────────────────────────
+def _extrair_produto(pdf_path):
+    doc = fitz.open(pdf_path)
+    all_rows = []
+    for page in doc:
+        for _, items in _palavras_por_linha(page):
+            texts = [t for _, t in items]
+            if not _is_noise(texts):
+                all_rows.append(texts)
 
-def extrair_pdf(pdf_path: str) -> dict:
-    """
-    Processa um PDF e retorna:
-    {
-        "tipo": "mes" | "produto" | "cidade" | "estado" | "cliente" | "pagamento",
-        "vendedor": "Nome Vendedor",
-        "dados": [[rank, categoria, valor], ...]
-    }
-    Retorna None se o tipo não for reconhecido.
-    """
+    groups = []
+    current = None
+    for texts in all_rows:
+        has_code = any(PRODUCT_CODE_RE.match(t) for t in texts)
+        if has_code:
+            current = {'texts': list(texts)}
+            groups.append(current)
+        elif current:
+            current['texts'].extend(texts)
+
+    unified = defaultdict(float)
+    rank_map = {}
+
+    for g in groups:
+        texts = g['texts']
+        rank = None
+        valor = None
+        produto_parts = []
+        i = 0
+        while i < len(texts):
+            t = texts[i]
+            if re.match(r'^\d{1,4}$', t) and rank is None and not PRODUCT_CODE_RE.match(t):
+                rank = int(t)
+            elif t == 'R$' and i + 1 < len(texts):
+                v = _limpar_valor(texts[i + 1])
+                if v: valor = v
+                i += 1
+            elif re.search(r'[\d,]+%', t):
+                pass
+            elif PRODUCT_CODE_RE.match(t) or t in ('-', 'R$', '%'):
+                pass
+            else:
+                produto_parts.append(t)
+            i += 1
+
+        produto = ' '.join(produto_parts)
+        produto = CX_RE.sub('', produto).strip()
+        produto = re.sub(r'[\s\-]+$', '', produto).strip()
+
+        if valor and produto:
+            if produto not in rank_map and rank:
+                rank_map[produto] = rank
+            unified[produto] += valor
+
+    return [
+        [rank_map.get(p, 0), p, v]
+        for p, v in sorted(unified.items(), key=lambda x: -x[1])
+    ]
+
+
+def _extrair_simples(pdf_path):
+    doc = fitz.open(pdf_path)
+    results = []
+    for page in doc:
+        for _, items in _palavras_por_linha(page):
+            texts = [t for _, t in items]
+            if _is_noise(texts): continue
+            if len(texts) < 3: continue
+            if not re.match(r'^\d{1,4}$', texts[0]): continue
+            rank = int(texts[0])
+            valor = None
+            nome_parts = []
+            i = 1
+            while i < len(texts):
+                t = texts[i]
+                if t == 'R$' and i + 1 < len(texts):
+                    valor = _limpar_valor(texts[i + 1])
+                    break
+                nome_parts.append(t)
+                i += 1
+            nome_raw = ' '.join(nome_parts)
+            nome = CLIENT_CODE_RE.sub('', nome_raw).strip()
+            nome = re.sub(r'[\#\*\&]+$', '', nome).strip()
+            if valor and nome:
+                results.append([rank, nome, valor])
+    return results
+
+
+def extrair_tabela_pdf(pdf_path, tipo=None):
+    if tipo == 'produto':
+        return _extrair_produto(pdf_path)
+    return _extrair_simples(pdf_path)
+
+
+def extrair_pdf(pdf_path):
     tipo = detectar_tipo(Path(pdf_path).name, pdf_path)
     if tipo is None:
-        logger.warning(f"Tipo não reconhecido: {pdf_path}")
+        logger.warning(f'Tipo não reconhecido: {pdf_path}')
         return None
-
     vendedor = extrair_vendedor(pdf_path)
-    dados = extrair_tabela_pdf(pdf_path)
-
-    logger.info(f"  {Path(pdf_path).name} → {vendedor} | {tipo} | {len(dados)} linhas")
-    return {"tipo": tipo, "vendedor": vendedor, "dados": dados}
+    dados = extrair_tabela_pdf(pdf_path, tipo)
+    logger.info(f'{Path(pdf_path).name} -> {vendedor} | {tipo} | {len(dados)} linhas')
+    return {'tipo': tipo, 'vendedor': vendedor, 'dados': dados}

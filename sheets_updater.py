@@ -102,59 +102,93 @@ def _limpar_e_escrever(ws: gspread.Worksheet, primeira_linha: int, dados: list[l
 # ──────────────────────────────────────────────────────────────────────────────
 
 def atualizar_cidades(ss: gspread.Spreadsheet, todos_dados: list[dict]):
-    """Aba VENDAS X CIDADES — linha 4+: VENDEDOR | CIDADE | VALOR"""
-    ws = _get_worksheet(ss,"VENDAS X CIDADES")
+    """Aba VENDAS X CIDADES — VENDEDOR | CIDADE | VALOR"""
+    try:
+        ws = _get_worksheet(ss, "VENDAS X CIDADES")
+    except ValueError:
+        logger.warning("Aba VENDAS X CIDADES não encontrada — ignorando")
+        return
     linhas = []
     for item in todos_dados:
         if item["tipo"] != "cidade":
             continue
         for _, cidade, valor in item["dados"]:
             linhas.append([item["vendedor"], cidade, valor])
-    linhas.sort(key=lambda r: (r[0], -r[2]))
-    _limpar_e_escrever(ws, 4, linhas)
-    logger.info(f"VENDAS X CIDADES → {len(linhas)} linhas")
+    if linhas:
+        linhas.sort(key=lambda r: -r[2])
+        ws.append_rows(linhas, value_input_option="USER_ENTERED")
+        logger.info(f"VENDAS X CIDADES → {len(linhas)} linhas")
 
 
 def atualizar_estados(ss: gspread.Spreadsheet, todos_dados: list[dict]):
-    """Aba VENDAS X ESTADOS — linha 4+: VENDEDOR | ESTADO | VALOR"""
-    ws = _get_worksheet(ss,"VENDAS X ESTADOS")
+    """Aba VENDAS X ESTADOS — VENDEDOR | ESTADO | VALOR"""
+    try:
+        ws = _get_worksheet(ss, "VENDAS X ESTADOS")
+    except ValueError:
+        logger.warning("Aba VENDAS X ESTADOS não encontrada — ignorando")
+        return
     linhas = []
     for item in todos_dados:
         if item["tipo"] != "estado":
             continue
         for _, estado, valor in item["dados"]:
             linhas.append([item["vendedor"], estado, valor])
-    linhas.sort(key=lambda r: (r[0], -r[2]))
-    _limpar_e_escrever(ws, 4, linhas)
-    logger.info(f"VENDAS X ESTADOS → {len(linhas)} linhas")
+    if linhas:
+        linhas.sort(key=lambda r: -r[2])
+        ws.append_rows(linhas, value_input_option="USER_ENTERED")
+        logger.info(f"VENDAS X ESTADOS → {len(linhas)} linhas")
 
 
 def atualizar_mes(ss: gspread.Spreadsheet, todos_dados: list[dict]):
-    """Aba VENDAS X MÊS — linha 5+: VENDEDOR | MÊS | VALOR"""
-    ws = _get_worksheet(ss,"VENDAS X MÊS")
+    """Aba VENDAS X MÊS — VENDEDOR | MÊS | VALOR"""
+    try:
+        ws = _get_worksheet(ss, "VENDAS X MÊS")
+    except ValueError:
+        logger.warning("Aba VENDAS X MÊS não encontrada — ignorando")
+        return
     linhas = []
     for item in todos_dados:
         if item["tipo"] != "mes":
             continue
         for _, mes, valor in item["dados"]:
             linhas.append([item["vendedor"], mes, valor])
-    linhas.sort(key=lambda r: (r[0], r[1]))
-    _limpar_e_escrever(ws, 5, linhas)
-    logger.info(f"VENDAS X MÊS → {len(linhas)} linhas")
+    if linhas:
+        linhas.sort(key=lambda r: (r[0], r[1]))
+        ws.append_rows(linhas, value_input_option="USER_ENTERED")
+        logger.info(f"VENDAS X MÊS → {len(linhas)} linhas")
 
 
 def atualizar_produtos(ss: gspread.Spreadsheet, todos_dados: list[dict]):
-    """Aba VENDAS X PRODUTOS — linha 2+: RANK | PRODUTO | VENDEDOR | VALOR"""
+    """Aba VENDAS X PRODUTOS — linha 2+: VENDEDOR | PRODUTO | VALOR"""
     ws = _get_worksheet(ss,"VENDAS X PRODUTOS")
     linhas = []
     for item in todos_dados:
         if item["tipo"] != "produto":
             continue
-        for rank, produto, valor in item["dados"]:
-            linhas.append([rank, produto, item["vendedor"], valor])
-    linhas.sort(key=lambda r: (r[2], r[0]))  # por vendedor, depois rank
-    _limpar_e_escrever(ws, 2, linhas)
+        for _, produto, valor in item["dados"]:
+            linhas.append([item["vendedor"], produto, valor])
+    linhas.sort(key=lambda r: (-r[2]))  # por valor desc
+    ws.append_rows(linhas, value_input_option="USER_ENTERED")
     logger.info(f"VENDAS X PRODUTOS → {len(linhas)} linhas")
+
+
+def atualizar_clientes(ss: gspread.Spreadsheet, todos_dados: list[dict]):
+    """Aba VENDAS X CLIENTES — VENDEDOR | CLIENTE | VALOR"""
+    try:
+        ws = _get_worksheet(ss, "VENDAS X CLIENTES")
+    except ValueError:
+        logger.warning("Aba VENDAS X CLIENTES não encontrada — ignorando")
+        return
+    linhas = []
+    for item in todos_dados:
+        if item["tipo"] != "cliente":
+            continue
+        for _, cliente, valor in item["dados"]:
+            linhas.append([item["vendedor"], cliente, valor])
+    if linhas:
+        linhas.sort(key=lambda r: -r[2])
+        ws.append_rows(linhas, value_input_option="USER_ENTERED")
+        logger.info(f"VENDAS X CLIENTES → {len(linhas)} linhas")
 
 
 def atualizar_produtos_consolidados(ss: gspread.Spreadsheet, todos_dados: list[dict]):
@@ -261,6 +295,7 @@ def atualizar_sheets(todos_dados: list[dict]) -> str:
     atualizar_estados(ss, todos_dados)
     atualizar_mes(ss, todos_dados)
     atualizar_produtos(ss, todos_dados)
+    atualizar_clientes(ss, todos_dados)
     atualizar_produtos_consolidados(ss, todos_dados)
     atualizar_realizado_metas(ss, todos_dados)
 

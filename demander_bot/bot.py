@@ -31,12 +31,10 @@ ESTADOS = [
 VENDEDORES = [
     "Adroaldo Dos Santos",
     "Cristiano Aranha",
-    "Emerson Barbosa",
     "Gustavo Reis",
     "Marcelo Pereira",
     "Rone Aranha",
     "Wanderson Silva",
-    "Wellington Rodrigues",
 ]
 
 TIPO_LABEL = {
