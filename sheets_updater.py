@@ -42,16 +42,15 @@ MES_COL = {
     "12": 13, # DEZEMBRO (coluna M — TOTAL ANO está em M também; ajuste se necessário)
 }
 
-# Ordem fixa dos vendedores nas linhas do REALIZADO (linhas 14-21 = índices 0-7)
+# Ordem fixa dos vendedores nas linhas do REALIZADO (linhas 14-19)
+# Deve coincidir exatamente com a ordem na planilha
 VENDEDORES_METAS = [
     "Adroaldo Dos Santos",
     "Cristiano Aranha",
-    "Emerson Barbosa",
     "Gustavo Reis",
     "Marcelo Pereira",
     "Rone Aranha",
     "Wanderson Silva",
-    "Wellington Rodrigues",
 ]
 
 
@@ -83,6 +82,42 @@ def _conectar() -> gspread.Spreadsheet:
     return gc.open_by_key(spreadsheet_id)
 
 
+def _remover_linhas_vendedor(ws: gspread.Worksheet, vendedor: str, primeira_linha: int):
+    """Remove todas as linhas do vendedor a partir de primeira_linha (evita duplicatas)."""
+    todas = ws.get_all_values()
+    vendedor_norm = _normalizar_vendedor(vendedor)
+    indices = [
+        i + 1  # 1-based
+        for i, row in enumerate(todas)
+        if i + 1 >= primeira_linha and row and _normalizar_vendedor(str(row[0])) == vendedor_norm
+    ]
+    for linha in reversed(indices):
+        ws.delete_rows(linha)
+    if indices:
+        logger.info(f"Removidas {len(indices)} linhas existentes de '{vendedor}' em '{ws.title}'")
+
+
+def _atualizar_data(ws: gspread.Worksheet, periodo_fim: str):
+    """Escreve 'Atualizado até: DD/MM/AAAA' na célula N1 da aba."""
+    if not periodo_fim:
+        return
+    try:
+        atual = ws.acell("N1").value or ""
+        # Só atualiza se a nova data for maior que a atual
+        import re as _re
+        datas = _re.findall(r'\d{2}/\d{2}/\d{4}', atual)
+        if datas:
+            from datetime import datetime
+            data_atual = datetime.strptime(datas[0], "%d/%m/%Y")
+            data_nova  = datetime.strptime(periodo_fim, "%d/%m/%Y")
+            if data_nova <= data_atual:
+                return
+        ws.update("N1", [[f"Atualizado até: {periodo_fim}"]])
+        logger.info(f"'{ws.title}' → Atualizado até: {periodo_fim}")
+    except Exception as e:
+        logger.warning(f"Não foi possível atualizar data em '{ws.title}': {e}")
+
+
 def _limpar_e_escrever(ws: gspread.Worksheet, primeira_linha: int, dados: list[list]):
     """Limpa a partir de primeira_linha e escreve os dados."""
     # Descobre quantas linhas já existem para limpar
@@ -109,14 +144,20 @@ def atualizar_cidades(ss: gspread.Spreadsheet, todos_dados: list[dict]):
         logger.warning("Aba VENDAS X CIDADES não encontrada — ignorando")
         return
     linhas = []
+    vendedores_vistos = set()
     for item in todos_dados:
         if item["tipo"] != "cidade":
             continue
+        vendedores_vistos.add(item["vendedor"])
         for _, cidade, valor in item["dados"]:
             linhas.append([item["vendedor"], cidade, valor])
     if linhas:
+        for v in vendedores_vistos:
+            _remover_linhas_vendedor(ws, v, primeira_linha=4)
         linhas.sort(key=lambda r: -r[2])
         ws.append_rows(linhas, value_input_option="USER_ENTERED")
+        periodo_fim = next((i["periodo_fim"] for i in todos_dados if i["tipo"] == "cidade" and i.get("periodo_fim")), None)
+        _atualizar_data(ws, periodo_fim)
         logger.info(f"VENDAS X CIDADES → {len(linhas)} linhas")
 
 
@@ -128,14 +169,20 @@ def atualizar_estados(ss: gspread.Spreadsheet, todos_dados: list[dict]):
         logger.warning("Aba VENDAS X ESTADOS não encontrada — ignorando")
         return
     linhas = []
+    vendedores_vistos = set()
     for item in todos_dados:
         if item["tipo"] != "estado":
             continue
+        vendedores_vistos.add(item["vendedor"])
         for _, estado, valor in item["dados"]:
             linhas.append([item["vendedor"], estado, valor])
     if linhas:
+        for v in vendedores_vistos:
+            _remover_linhas_vendedor(ws, v, primeira_linha=4)
         linhas.sort(key=lambda r: -r[2])
         ws.append_rows(linhas, value_input_option="USER_ENTERED")
+        periodo_fim = next((i["periodo_fim"] for i in todos_dados if i["tipo"] == "estado" and i.get("periodo_fim")), None)
+        _atualizar_data(ws, periodo_fim)
         logger.info(f"VENDAS X ESTADOS → {len(linhas)} linhas")
 
 
@@ -147,29 +194,42 @@ def atualizar_mes(ss: gspread.Spreadsheet, todos_dados: list[dict]):
         logger.warning("Aba VENDAS X MÊS não encontrada — ignorando")
         return
     linhas = []
+    vendedores_vistos = set()
     for item in todos_dados:
         if item["tipo"] != "mes":
             continue
+        vendedores_vistos.add(item["vendedor"])
         for _, mes, valor in item["dados"]:
             linhas.append([item["vendedor"], mes, valor])
     if linhas:
+        for v in vendedores_vistos:
+            _remover_linhas_vendedor(ws, v, primeira_linha=5)
         linhas.sort(key=lambda r: (r[0], r[1]))
         ws.append_rows(linhas, value_input_option="USER_ENTERED")
+        periodo_fim = next((i["periodo_fim"] for i in todos_dados if i["tipo"] == "mes" and i.get("periodo_fim")), None)
+        _atualizar_data(ws, periodo_fim)
         logger.info(f"VENDAS X MÊS → {len(linhas)} linhas")
 
 
 def atualizar_produtos(ss: gspread.Spreadsheet, todos_dados: list[dict]):
     """Aba VENDAS X PRODUTOS — linha 2+: VENDEDOR | PRODUTO | VALOR"""
-    ws = _get_worksheet(ss,"VENDAS X PRODUTOS")
+    ws = _get_worksheet(ss, "VENDAS X PRODUTOS")
     linhas = []
+    vendedores_vistos = set()
     for item in todos_dados:
         if item["tipo"] != "produto":
             continue
+        vendedores_vistos.add(item["vendedor"])
         for _, produto, valor in item["dados"]:
             linhas.append([item["vendedor"], produto, valor])
-    linhas.sort(key=lambda r: (-r[2]))  # por valor desc
-    ws.append_rows(linhas, value_input_option="USER_ENTERED")
-    logger.info(f"VENDAS X PRODUTOS → {len(linhas)} linhas")
+    if linhas:
+        for v in vendedores_vistos:
+            _remover_linhas_vendedor(ws, v, primeira_linha=2)
+        linhas.sort(key=lambda r: -r[2])
+        ws.append_rows(linhas, value_input_option="USER_ENTERED")
+        periodo_fim = next((i["periodo_fim"] for i in todos_dados if i["tipo"] == "produto" and i.get("periodo_fim")), None)
+        _atualizar_data(ws, periodo_fim)
+        logger.info(f"VENDAS X PRODUTOS → {len(linhas)} linhas")
 
 
 def atualizar_clientes(ss: gspread.Spreadsheet, todos_dados: list[dict]):
@@ -180,14 +240,20 @@ def atualizar_clientes(ss: gspread.Spreadsheet, todos_dados: list[dict]):
         logger.warning("Aba VENDAS X CLIENTES não encontrada — ignorando")
         return
     linhas = []
+    vendedores_vistos = set()
     for item in todos_dados:
         if item["tipo"] != "cliente":
             continue
+        vendedores_vistos.add(item["vendedor"])
         for _, cliente, valor in item["dados"]:
             linhas.append([item["vendedor"], cliente, valor])
     if linhas:
+        for v in vendedores_vistos:
+            _remover_linhas_vendedor(ws, v, primeira_linha=2)
         linhas.sort(key=lambda r: -r[2])
         ws.append_rows(linhas, value_input_option="USER_ENTERED")
+        periodo_fim = next((i["periodo_fim"] for i in todos_dados if i["tipo"] == "cliente" and i.get("periodo_fim")), None)
+        _atualizar_data(ws, periodo_fim)
         logger.info(f"VENDAS X CLIENTES → {len(linhas)} linhas")
 
 
@@ -233,6 +299,8 @@ def atualizar_produtos_consolidados(ss: gspread.Spreadsheet, todos_dados: list[d
         linhas.append(row)
 
     _limpar_e_escrever(ws, 2, linhas)
+    periodo_fim = next((i["periodo_fim"] for i in todos_dados if i["tipo"] == "produto" and i.get("periodo_fim")), None)
+    _atualizar_data(ws, periodo_fim)
     logger.info(f"PRODUTOS CONSOLIDADOS → {len(linhas)} produtos, {len(vendedores)} vendedores")
 
 
@@ -241,34 +309,49 @@ def atualizar_realizado_metas(ss: gspread.Spreadsheet, todos_dados: list[dict]):
     Aba METAS X VENDAS — seção REALIZADO 2026 (linhas 14-21).
     Estrutura: linha 14 = Adroaldo, 15 = Cristiano, ...
     Colunas B-M = Jan-Dez
-    Limpa apenas as células de valor (B14:M21) e reescreve.
+    Preserva valores já existentes — só sobrescreve células com novos dados.
     """
-    ws = _get_worksheet(ss,"METAS X VENDAS")
+    ws = _get_worksheet(ss, "METAS X VENDAS")
 
     # Agrega: vendedor → {mes_num: valor}
-    realizado: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    novos: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     for item in todos_dados:
         if item["tipo"] != "mes":
             continue
         vendedor = _normalizar_vendedor(item["vendedor"])
         for _, mes_str, valor in item["dados"]:
-            # mes_str formato "MM/AAAA"
             mes_num = mes_str.split("/")[0] if "/" in mes_str else None
             if mes_num:
-                realizado[vendedor][mes_num] += valor
+                novos[vendedor][mes_num] += valor
 
-    # Monta matriz 8 linhas × 12 colunas (Jan-Dez)
-    matriz = []
-    for vendedor_padrao in VENDEDORES_METAS:
-        linha = []
-        dados_v = realizado.get(_normalizar_vendedor(vendedor_padrao), {})
-        for mes_num in [f"{m:02d}" for m in range(1, 13)]:
-            linha.append(dados_v.get(mes_num, ""))
-        matriz.append(linha)
+    if not novos:
+        logger.info("METAS X VENDAS — nenhum dado de mês para atualizar")
+        return
 
-    # Escreve em B14:M21
-    ws.update("B14:M21", matriz)
-    logger.info("METAS X VENDAS (REALIZADO) → atualizado")
+    n_vendedores = len(VENDEDORES_METAS)
+    # Colunas B-L = Janeiro a Novembro (11 meses); M é ACUMULADO (fórmula, não toca)
+    meses = [f"{m:02d}" for m in range(1, 12)]  # 01 a 11
+
+    # Lê a matriz atual do Sheets para preservar valores existentes (B14:L19)
+    ultima_linha = 13 + n_vendedores  # linha 19 para 6 vendedores
+    atual = ws.get(f"B14:L{ultima_linha}") or []
+    while len(atual) < n_vendedores:
+        atual.append([])
+    for i in range(n_vendedores):
+        while len(atual[i]) < 11:
+            atual[i].append("")
+
+    # Mescla: só sobrescreve células com novos dados
+    for row_idx, vendedor_padrao in enumerate(VENDEDORES_METAS):
+        dados_v = novos.get(_normalizar_vendedor(vendedor_padrao), {})
+        for col_idx, mes_num in enumerate(meses):
+            if mes_num in dados_v:
+                atual[row_idx][col_idx] = dados_v[mes_num]
+
+    ws.update(f"B14:L{ultima_linha}", atual, value_input_option="USER_ENTERED")
+    periodo_fim = next((i["periodo_fim"] for i in todos_dados if i["tipo"] == "mes" and i.get("periodo_fim")), None)
+    _atualizar_data(ws, periodo_fim)
+    logger.info(f"METAS X VENDAS (REALIZADO) → B14:L{ultima_linha} atualizado, coluna M preservada")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

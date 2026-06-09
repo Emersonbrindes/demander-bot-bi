@@ -162,6 +162,35 @@ def extrair_tabela_pdf(pdf_path, tipo=None):
     return _extrair_simples(pdf_path)
 
 
+def extrair_periodo(pdf_path):
+    """
+    Extrai o período do relatório.
+    Retorna (data_inicio, data_fim) como strings, ex: ('01/06/2026', '07/06/2026').
+    Retorna (None, None) se não encontrar.
+    """
+    PERIODO_RE = re.compile(
+        r'(\d{2}[./]\d{2}[./]\d{2,4})\s+a\s+(\d{2}[./]\d{2}[./]\d{2,4})'
+    )
+    try:
+        doc = fitz.open(pdf_path)
+        for page in doc:
+            texto = page.get_text()
+            m = PERIODO_RE.search(texto)
+            if m:
+                inicio = m.group(1).replace('.', '/')
+                fim    = m.group(2).replace('.', '/')
+                # Normaliza ano de 2 dígitos para 4 dígitos
+                def _fix_ano(d):
+                    partes = d.split('/')
+                    if len(partes) == 3 and len(partes[2]) == 2:
+                        partes[2] = '20' + partes[2]
+                    return '/'.join(partes)
+                return _fix_ano(inicio), _fix_ano(fim)
+    except Exception:
+        pass
+    return None, None
+
+
 def extrair_pdf(pdf_path):
     tipo = detectar_tipo(Path(pdf_path).name, pdf_path)
     if tipo is None:
@@ -169,5 +198,12 @@ def extrair_pdf(pdf_path):
         return None
     vendedor = extrair_vendedor(pdf_path)
     dados = extrair_tabela_pdf(pdf_path, tipo)
-    logger.info(f'{Path(pdf_path).name} -> {vendedor} | {tipo} | {len(dados)} linhas')
-    return {'tipo': tipo, 'vendedor': vendedor, 'dados': dados}
+    periodo_inicio, periodo_fim = extrair_periodo(pdf_path)
+    logger.info(f'{Path(pdf_path).name} -> {vendedor} | {tipo} | {len(dados)} linhas | período: {periodo_inicio} a {periodo_fim}')
+    return {
+        'tipo': tipo,
+        'vendedor': vendedor,
+        'dados': dados,
+        'periodo_inicio': periodo_inicio,
+        'periodo_fim': periodo_fim,
+    }
