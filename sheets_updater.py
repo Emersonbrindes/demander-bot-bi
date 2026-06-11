@@ -1,6 +1,6 @@
 """
 sheets_updater.py
-Recebe os dados extraídos pelo pdf_extractor e atualiza as abas do Google Sheets.
+Recebe os dados extraidos pelo pdf_extractor e atualiza as abas do Google Sheets.
 
 Estrutura das abas:
   VENDAS X CIDADES       → linha 4+  : VENDEDOR | CIDADE | VALOR
@@ -86,15 +86,14 @@ def _remover_linhas_vendedor(ws: gspread.Worksheet, vendedor: str, primeira_linh
     """Remove todas as linhas do vendedor a partir de primeira_linha (evita duplicatas)."""
     todas = ws.get_all_values()
     vendedor_norm = _normalizar_vendedor(vendedor)
-    indices = [
-        i + 1  # 1-based
-        for i, row in enumerate(todas)
-        if i + 1 >= primeira_linha and row and _normalizar_vendedor(str(row[0])) == vendedor_norm
-    ]
-    for linha in reversed(indices):
-        ws.delete_rows(linha)
-    if indices:
-        logger.info(f"Removidas {len(indices)} linhas existentes de '{vendedor}' em '{ws.title}'")
+    kept = [row for i, row in enumerate(todas)
+            if i + 1 < primeira_linha or not row or _normalizar_vendedor(str(row[0])) != vendedor_norm]
+    if len(kept) == len(todas):
+        return  # nada a remover
+    logger.info(f"Removendo linhas de '{vendedor}' em '{ws.title}' (reescrita em lote)")
+    ws.clear()
+    if kept:
+        ws.update("A1", [row[:3] for row in kept])
 
 
 def _atualizar_data(ws: gspread.Worksheet, periodo_fim: str):
@@ -107,11 +106,14 @@ def _atualizar_data(ws: gspread.Worksheet, periodo_fim: str):
         import re as _re
         datas = _re.findall(r'\d{2}/\d{2}/\d{4}', atual)
         if datas:
-            from datetime import datetime
-            data_atual = datetime.strptime(datas[0], "%d/%m/%Y")
-            data_nova  = datetime.strptime(periodo_fim, "%d/%m/%Y")
-            if data_nova <= data_atual:
-                return
+            try:
+                from datetime import datetime
+                data_atual = datetime.strptime(datas[0], "%d/%m/%Y")
+                data_nova  = datetime.strptime(periodo_fim, "%d/%m/%Y")
+                if data_nova <= data_atual:
+                    return
+            except ValueError:
+                pass  # data inválida (ex: 31/04) — atualiza mesmo assim
         ws.update("N1", [[f"Atualizado até: {periodo_fim}"]])
         logger.info(f"'{ws.title}' → Atualizado até: {periodo_fim}")
     except Exception as e:
@@ -155,7 +157,7 @@ def atualizar_cidades(ss: gspread.Spreadsheet, todos_dados: list[dict]):
         for v in vendedores_vistos:
             _remover_linhas_vendedor(ws, v, primeira_linha=4)
         linhas.sort(key=lambda r: -r[2])
-        ws.append_rows(linhas, value_input_option="USER_ENTERED")
+        ws.append_rows(linhas, value_input_option="USER_ENTERED", table_range="A1")
         periodo_fim = next((i["periodo_fim"] for i in todos_dados if i["tipo"] == "cidade" and i.get("periodo_fim")), None)
         _atualizar_data(ws, periodo_fim)
         logger.info(f"VENDAS X CIDADES → {len(linhas)} linhas")
@@ -180,7 +182,7 @@ def atualizar_estados(ss: gspread.Spreadsheet, todos_dados: list[dict]):
         for v in vendedores_vistos:
             _remover_linhas_vendedor(ws, v, primeira_linha=4)
         linhas.sort(key=lambda r: -r[2])
-        ws.append_rows(linhas, value_input_option="USER_ENTERED")
+        ws.append_rows(linhas, value_input_option="USER_ENTERED", table_range="A1")
         periodo_fim = next((i["periodo_fim"] for i in todos_dados if i["tipo"] == "estado" and i.get("periodo_fim")), None)
         _atualizar_data(ws, periodo_fim)
         logger.info(f"VENDAS X ESTADOS → {len(linhas)} linhas")
@@ -205,7 +207,7 @@ def atualizar_mes(ss: gspread.Spreadsheet, todos_dados: list[dict]):
         for v in vendedores_vistos:
             _remover_linhas_vendedor(ws, v, primeira_linha=5)
         linhas.sort(key=lambda r: (r[0], r[1]))
-        ws.append_rows(linhas, value_input_option="USER_ENTERED")
+        ws.append_rows(linhas, value_input_option="USER_ENTERED", table_range="A1")
         periodo_fim = next((i["periodo_fim"] for i in todos_dados if i["tipo"] == "mes" and i.get("periodo_fim")), None)
         _atualizar_data(ws, periodo_fim)
         logger.info(f"VENDAS X MÊS → {len(linhas)} linhas")
@@ -213,7 +215,11 @@ def atualizar_mes(ss: gspread.Spreadsheet, todos_dados: list[dict]):
 
 def atualizar_produtos(ss: gspread.Spreadsheet, todos_dados: list[dict]):
     """Aba VENDAS X PRODUTOS — linha 2+: VENDEDOR | PRODUTO | VALOR"""
-    ws = _get_worksheet(ss, "VENDAS X PRODUTOS")
+    try:
+        ws = _get_worksheet(ss, "VENDAS X PRODUTOS")
+    except ValueError:
+        logger.warning("Aba VENDAS X PRODUTOS não encontrada — ignorando")
+        return
     linhas = []
     vendedores_vistos = set()
     for item in todos_dados:
@@ -226,7 +232,7 @@ def atualizar_produtos(ss: gspread.Spreadsheet, todos_dados: list[dict]):
         for v in vendedores_vistos:
             _remover_linhas_vendedor(ws, v, primeira_linha=2)
         linhas.sort(key=lambda r: -r[2])
-        ws.append_rows(linhas, value_input_option="USER_ENTERED")
+        ws.append_rows(linhas, value_input_option="USER_ENTERED", table_range="A1")
         periodo_fim = next((i["periodo_fim"] for i in todos_dados if i["tipo"] == "produto" and i.get("periodo_fim")), None)
         _atualizar_data(ws, periodo_fim)
         logger.info(f"VENDAS X PRODUTOS → {len(linhas)} linhas")
@@ -251,7 +257,7 @@ def atualizar_clientes(ss: gspread.Spreadsheet, todos_dados: list[dict]):
         for v in vendedores_vistos:
             _remover_linhas_vendedor(ws, v, primeira_linha=2)
         linhas.sort(key=lambda r: -r[2])
-        ws.append_rows(linhas, value_input_option="USER_ENTERED")
+        ws.append_rows(linhas, value_input_option="USER_ENTERED", table_range="A1")
         periodo_fim = next((i["periodo_fim"] for i in todos_dados if i["tipo"] == "cliente" and i.get("periodo_fim")), None)
         _atualizar_data(ws, periodo_fim)
         logger.info(f"VENDAS X CLIENTES → {len(linhas)} linhas")
@@ -263,7 +269,11 @@ def atualizar_produtos_consolidados(ss: gspread.Spreadsheet, todos_dados: list[d
     RANK | PRODUTO | TOTAL GERAL | % GERAL | [col por vendedor ordenado]
     Linha 1 = cabeçalho (não apaga), linha 2+ = dados
     """
-    ws = _get_worksheet(ss,"PRODUTOS CONSOLIDADOS")
+    try:
+        ws = _get_worksheet(ss, "PRODUTOS CONSOLIDADOS")
+    except ValueError:
+        logger.warning("Aba PRODUTOS CONSOLIDADOS não encontrada — ignorando")
+        return
 
     # Agrega: produto → {vendedor: valor}
     produto_vendedor: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
@@ -349,9 +359,64 @@ def atualizar_realizado_metas(ss: gspread.Spreadsheet, todos_dados: list[dict]):
                 atual[row_idx][col_idx] = dados_v[mes_num]
 
     ws.update(f"B14:L{ultima_linha}", atual, value_input_option="USER_ENTERED")
-    periodo_fim = next((i["periodo_fim"] for i in todos_dados if i["tipo"] == "mes" and i.get("periodo_fim")), None)
-    _atualizar_data(ws, periodo_fim)
     logger.info(f"METAS X VENDAS (REALIZADO) → B14:L{ultima_linha} atualizado, coluna M preservada")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Reparo: move dados gravados por engano nas colunas N+ de volta para A/B/C
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Aba → primeira linha de dados
+ABAS_REPARO = {
+    "VENDAS X CIDADES": 4,
+    "VENDAS X ESTADOS": 4,
+    "VENDAS X MÊS": 5,
+    "VENDAS X PRODUTOS": 2,
+    "VENDAS X CLIENTES": 2,
+}
+
+
+def reparar_colunas(ss: gspread.Spreadsheet | None = None) -> str:
+    """
+    Corrige dados que o append_rows gravou nas colunas N/O/P (bug do table_range).
+    Move o bloco para as colunas A/B/C, abaixo da última linha preenchida,
+    e limpa as colunas N+ (preservando a data em N1).
+    """
+    if ss is None:
+        ss = _conectar()
+
+    relatorio = []
+    for nome, primeira_linha in ABAS_REPARO.items():
+        try:
+            ws = _get_worksheet(ss, nome)
+        except ValueError:
+            continue
+
+        vals = ws.get_all_values()
+        bloco = []
+        for i, row in enumerate(vals):
+            if i == 0:
+                continue  # linha 1: N1 tem 'Atualizado até' — preserva
+            extra = row[13:16] if len(row) > 13 else []
+            if any(str(c).strip() for c in extra):
+                bloco.append((extra + ["", "", ""])[:3])
+
+        if not bloco:
+            continue
+
+        # Última linha preenchida na coluna A
+        ultima_a = 0
+        for i, row in enumerate(vals):
+            if row and str(row[0]).strip():
+                ultima_a = i + 1
+        destino = max(primeira_linha, ultima_a + 1)
+
+        ws.update(f"A{destino}", bloco, value_input_option="USER_ENTERED")
+        ws.batch_clear([f"N2:Z{len(vals)}"])
+        relatorio.append(f"• {nome}: {len(bloco)} linhas movidas para A{destino}")
+        logger.info(f"REPARO {nome}: {len(bloco)} linhas N→A (linha {destino})")
+
+    return "\n".join(relatorio) if relatorio else "Nenhuma aba precisava de correção. ✅"
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -1,8 +1,15 @@
 import sys
-import os
+import os  # noqa
 
 # Adiciona a pasta raiz ao path para importar pdf_extractor, sheets_updater, scraper
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Carrega variáveis do .env (para execução local)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
+except ImportError:
+    pass
 
 import logging
 import tempfile
@@ -66,6 +73,7 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "3️⃣ Selecione o representante\n"
         "4️⃣ O Sheets é atualizado automaticamente!\n\n"
         "/clientes — Exportar clientes por cidade em Excel\n"
+        "/corrigir — Corrigir dados fora do lugar na planilha\n"
         "/cancelar — Cancelar operação em andamento",
         parse_mode="Markdown"
     )
@@ -78,74 +86,54 @@ async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    teclado = []
-    linha = []
-    for i, uf in enumerate(ESTADOS):
-        linha.append(InlineKeyboardButton(uf, callback_data=f"estado:{uf}"))
-        if (i + 1) % 5 == 0:
-            teclado.append(linha)
-            linha = []
-    if linha:
-        teclado.append(linha)
-    markup = InlineKeyboardMarkup(teclado)
     await update.message.reply_text(
-        "🗺️ *Passo 1 de 2 — Selecione o estado:*",
-        reply_markup=markup,
+        "🗺️ *Passo 1 de 2 — Digite a sigla do estado:*\n"
+        "Exemplo: `SP`, `RJ`, `MG`, `PA`",
         parse_mode="Markdown"
     )
     return ESCOLHER_ESTADO
 
 
 async def escolher_estado(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    estado = query.data.split(":")[1]
+    estado = update.message.text.strip().upper()
+    if estado not in ESTADOS:
+        await update.message.reply_text(
+            f"⚠️ Estado inválido: *{estado}*\nDigite uma sigla válida (ex: SP, RJ, PA).",
+            parse_mode="Markdown"
+        )
+        return ESCOLHER_ESTADO
     context.user_data["estado"] = estado
-    await query.edit_message_text(f"🔍 Buscando cidades em *{estado}*...", parse_mode="Markdown")
-    try:
-        from scraper import DemandScraper
-        scraper = DemandScraper()
-        cidades = scraper.buscar_cidades(estado)
-    except Exception as e:
-        logger.error(f"Erro ao buscar cidades: {e}")
-        await query.edit_message_text("❌ Erro ao acessar o Demander. Verifique as credenciais e tente novamente.")
-        return ConversationHandler.END
-    if not cidades:
-        await query.edit_message_text(f"⚠️ Nenhuma cidade encontrada para *{estado}*.", parse_mode="Markdown")
-        return ConversationHandler.END
-    context.user_data["cidades"] = cidades
-    teclado = [[InlineKeyboardButton(c, callback_data=f"cidade:{c}")] for c in sorted(cidades)]
-    markup = InlineKeyboardMarkup(teclado)
-    await query.edit_message_text(
-        f"📍 *Passo 2 de 2 — Selecione a cidade em {estado}:*",
-        reply_markup=markup,
+    await update.message.reply_text(
+        f"📍 *Passo 2 de 2 — Digite o nome da cidade em {estado}:*\n"
+        "Exemplo: `Belém`, `São Paulo`, `Manaus`",
         parse_mode="Markdown"
     )
     return ESCOLHER_CIDADE
 
 
 async def escolher_cidade(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    cidade = query.data.split(":", 1)[1]
+    cidade = update.message.text.strip()
     estado = context.user_data["estado"]
-    await query.edit_message_text(f"⏳ Exportando clientes de *{cidade} - {estado}*...", parse_mode="Markdown")
+    msg = await update.message.reply_text(
+        f"⏳ Exportando clientes de *{cidade} - {estado}*...",
+        parse_mode="Markdown"
+    )
     try:
         from scraper import DemandScraper
         scraper = DemandScraper()
-        caminho_excel = scraper.exportar_clientes(estado, cidade)
+        caminho_excel = await scraper.exportar_clientes(estado, cidade)
         with open(caminho_excel, "rb") as f:
-            await query.message.reply_document(
+            await update.message.reply_document(
                 document=f,
                 filename=f"clientes_{cidade}_{estado}.xlsx",
                 caption=f"✅ Clientes de *{cidade} - {estado}* exportados!",
                 parse_mode="Markdown"
             )
-        await query.edit_message_text(f"✅ Excel gerado para *{cidade} - {estado}*.", parse_mode="Markdown")
+        await msg.edit_text(f"✅ Excel gerado para *{cidade} - {estado}*.", parse_mode="Markdown")
         os.remove(caminho_excel)
     except Exception as e:
         logger.error(f"Erro ao exportar clientes: {e}")
-        await query.edit_message_text("❌ Erro ao gerar o Excel. Tente novamente.")
+        await msg.edit_text("❌ Erro ao gerar o Excel. Tente novamente.")
     return ConversationHandler.END
 
 
@@ -224,6 +212,18 @@ async def escolher_representante(update: Update, context: ContextTypes.DEFAULT_T
         )
 
 
+async def corrigir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Corrige dados gravados por engano nas colunas N+ do Sheets."""
+    msg = await update.message.reply_text("🛠️ Verificando e corrigindo a planilha...")
+    try:
+        from sheets_updater import reparar_colunas
+        resultado = reparar_colunas()
+        await msg.edit_text(f"✅ Correção concluída!\n\n{resultado}")
+    except Exception as e:
+        logger.error(f"Erro ao corrigir Sheets: {e}", exc_info=True)
+        await msg.edit_text(f"❌ Erro ao corrigir:\n{str(e)}")
+
+
 async def receber_foto_invalida(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "⚠️ Você enviou uma *foto*, não um PDF.\nUse 📎 → *Arquivo* para enviar PDFs.",
@@ -239,14 +239,15 @@ def main():
     conv_clientes = ConversationHandler(
         entry_points=[CommandHandler("clientes", clientes)],
         states={
-            ESCOLHER_ESTADO: [CallbackQueryHandler(escolher_estado, pattern="^estado:")],
-            ESCOLHER_CIDADE: [CallbackQueryHandler(escolher_cidade, pattern="^cidade:")],
+            ESCOLHER_ESTADO: [MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_estado)],
+            ESCOLHER_CIDADE: [MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_cidade)],
         },
         fallbacks=[CommandHandler("cancelar", cancelar)],
     )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ajuda", ajuda))
     app.add_handler(CommandHandler("cancelar", cancelar))
+    app.add_handler(CommandHandler("corrigir", corrigir))
     app.add_handler(conv_clientes)
     app.add_handler(CallbackQueryHandler(escolher_representante, pattern="^rep:"))
     app.add_handler(MessageHandler(filters.Document.PDF, receber_pdf))
@@ -256,4 +257,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import asyncio
+    asyncio.set_event_loop(asyncio.new_event_loop())
     main()
